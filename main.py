@@ -1,5 +1,6 @@
 
 import os
+import re
 
 from synthesize_file import synthesize_text_file, synthesize_ssml_file
 from transcribe_streaming_mic import recognize_microphone_stream
@@ -16,10 +17,10 @@ def play(filename):
 
 def synthesize_and_play(txt):
     txt_hash = hash(txt)
-    filename = os.path.join(SOUND_DIR, '{}.mp3'.format(txt_hash))
+    filename = os.path.join(SOUND_DIR, '{:x}.mp3'.format(txt_hash))
     if not os.path.isfile(filename):
         with open(filename, "wb") as fh:
-            synthesizer(txt, fh, TTS_CLIENT, lang=LANG)
+            synthesizer(txt, TTS_CLIENT, fh, lang=LANG)
     play(filename)
 
 class ScriptReader(object):
@@ -29,7 +30,7 @@ class ScriptReader(object):
         self.lang = LANG
 
     @staticmethod
-    def read_script(cls, filename):
+    def read_script(filename):
         script = {}
 
         with open(filename, encoding='utf-8') as fh:
@@ -47,7 +48,7 @@ class ScriptReader(object):
     def __call__(self, transcript):
         transcript = transcript.lower().strip()
 
-        replica = self.script.get(transcript, transcript.get('default'))
+        replica = self.script.get(transcript, self.script.get('default'))
 
         print("Got {}, respond with {}".format(transcript, replica))
 
