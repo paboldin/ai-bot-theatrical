@@ -31,6 +31,8 @@ from __future__ import division
 import re
 import sys
 
+import numpy
+
 from google.cloud import speech
 from google.cloud.speech import enums
 from google.cloud.speech import types
@@ -38,15 +40,16 @@ import pyaudio
 from six.moves import queue
 
 # Audio recording parameters
-RATE = 16000
+RATE = 44100
 CHUNK = int(RATE / 10)  # 100ms
 
 
 class MicrophoneStream(object):
     """Opens a recording stream as a generator yielding the audio chunks."""
-    def __init__(self, rate, chunk):
+    def __init__(self, rate, chunk, add_noise=0):
         self._rate = rate
         self._chunk = chunk
+        self._add_noise = add_noise
 
         # Create a thread-safe buffer of audio data
         self._buff = queue.Queue()
@@ -81,6 +84,11 @@ class MicrophoneStream(object):
 
     def _fill_buffer(self, in_data, frame_count, time_info, status_flags):
         """Continuously collect data from the audio stream, into the buffer."""
+        if self._add_noise:
+            buf = numpy.copy(numpy.frombuffer(in_data, dtype=numpy.uint16))
+            noise = self._add_noise * numpy.random.randn(*buf.shape)
+            buf += noise.astype(numpy.uint16)
+            in_data = buf.tobytes()
         self._buff.put(in_data)
         return None, pyaudio.paContinue
 
@@ -163,7 +171,7 @@ def listen_print_loop(responses):
 
 
 LANG='en-US'
-def recognize_microphone_stream(listen_loop, lang=LANG):
+def recognize_microphone_stream(listen_loop, lang=LANG, add_noise=0):
     client = speech.SpeechClient()
     config = types.RecognitionConfig(
         encoding=enums.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -173,7 +181,7 @@ def recognize_microphone_stream(listen_loop, lang=LANG):
         config=config,
         interim_results=True)
 
-    with MicrophoneStream(RATE, CHUNK) as stream:
+    with MicrophoneStream(RATE, CHUNK, add_noise) as stream:
         audio_generator = stream.generator()
         requests = (types.StreamingRecognizeRequest(audio_content=content)
                     for content in audio_generator)
