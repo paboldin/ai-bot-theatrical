@@ -1,6 +1,8 @@
 
+import hashlib
 import os
 import re
+import sys
 
 from synthesize_file import synthesize_text_file, synthesize_ssml_file
 from transcribe_streaming_mic import recognize_microphone_stream
@@ -16,8 +18,8 @@ def play(filename):
     os.system("mpg123 {}".format(filename))
 
 def synthesize_and_play(txt):
-    txt_hash = hash(txt)
-    filename = os.path.join(SOUND_DIR, '{:x}.mp3'.format(txt_hash))
+    txt_hash = hashlib.md5(txt.encode('utf-8')).hexdigest()
+    filename = os.path.join(SOUND_DIR, '{}.mp3'.format(txt_hash))
     if not os.path.isfile(filename):
         with open(filename, "wb") as fh:
             synthesizer(txt, TTS_CLIENT, fh, lang=LANG)
@@ -25,9 +27,11 @@ def synthesize_and_play(txt):
 
 class ScriptReader(object):
     def __init__(self, filename, callback, lang=LANG):
-        self.script = self.read_script(filename)
+        self.filename = filename
         self.callback = callback
         self.lang = LANG
+
+        self.update()
 
     @staticmethod
     def read_script(filename):
@@ -45,17 +49,28 @@ class ScriptReader(object):
 
         return script
 
-    def __call__(self, transcript):
+    def update(self):
+        self.script = self.read_script(self.filename)
+
+    def __call__(self, transcript, is_final=False):
         transcript = transcript.lower().strip()
 
-        replica = self.script.get(transcript, self.script.get('default'))
+        replica = self.script.get(transcript)
 
-        print("Got {}, respond with {}".format(transcript, replica))
+        if not replica and is_final:
+            replica = self.script.get('default')
 
         if not replica:
             return
 
+        print("Got {}, respond with {}".format(transcript, replica))
+
         self.callback(replica)
+
+        return True
+
+class StopIt(Exception):
+    pass
 
 class Listener(object):
     def __init__(self, reader):
@@ -73,37 +88,57 @@ class Listener(object):
             if not result.alternatives:
                 continue
 
-            # Display the transcription of the top alternative.
-            transcript = result.alternatives[0].transcript
+            #print(result, result.alternatives[0].transcript, "is_final = ", result.is_final)
 
-            # Display interim results, but with a carriage return at the end of the
-            # line, so subsequent lines will overwrite them.
-            #
-            # If the previous result was longer than this one, we need to print
-            # some extra spaces to overwrite the previous result
+            #if result.stability < 0.5:
+                #if result.is_final:
+                    #return
+                #continue
 
-            if result.is_final:
-                # Exit recognition if any of the transcribed phrases could be
-                # one of our keywords.
+            for alternative in result.alternatives:
+                transcript = alternative.transcript
+
+                print(transcript, result.is_final)
+
                 if re.search(r'\b(сдохни блядь|сдохни сука)\b', transcript, re.I):
                     print('Exiting..')
-                    break
+                    raise StopIt()
 
-                self.reader(transcript)
+                if re.search(r'\bсмени пластинку\b', transcript, re.I):
+                    print('Updating..')
+                    self.reader.update()
+                    return
+
+                if self.reader(transcript, result.is_final):
+                    # Force it to reconnect
+                    return
+
+            if result.is_final:
+                return
+
 
 def main():
     global TTS_CLIENT
     from google.cloud import texttospeech
     TTS_CLIENT = texttospeech.TextToSpeechClient()
 
+    try:
+        filename = sys.argv[1]
+    except IndexError:
+        filename = 'script-%s.txt' % LANG
+
     script_reader = ScriptReader(
-            'script-%s.txt' % LANG,
+            filename,
             synthesize_and_play,
             lang=LANG)
 
     listener = Listener(script_reader)
 
-    recognize_microphone_stream(listener, lang=LANG)
+    while True:
+        try:
+            recognize_microphone_stream(listener, lang=LANG, add_noise=100)
+        except StopIt:
+            break
 
 if __name__ == '__main__':
     main()
