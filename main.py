@@ -84,13 +84,24 @@ class ScriptReader(object):
     def update(self):
         self.script = self.read_script(self.filename)
 
+    def add(self, key, value):
+        key = self._text_process(key, is_input=True)
+        value = self._text_process(value)
+
+        self.script[key] = value
+
+    def remove(self, key):
+        key = self._text_process(key, is_input=True)
+        if key in self.script:
+            del self.script[key]
+
     def __call__(self, transcript, is_final=False):
         transcript = self._text_process(transcript, is_input=True)
 
         replica = self.script.get(transcript)
 
         if not replica and is_final:
-            replica = self.script.get('default')
+            replica = self.script.get('ничего непонятно')
 
         if not replica:
             return
@@ -132,7 +143,13 @@ class Listener(object):
 
                 print(transcript, result.is_final)
 
-                if re.search(r'\b(сдохни блядь|сдохни сука)\b', transcript, re.I):
+                if not re.search(r'василиса', transcript, re.I):
+                    if self.reader(transcript, result.is_final):
+                        # Force it to reconnect
+                        return
+                    continue
+
+                if re.search(r'\bумри\b', transcript, re.I):
                     print('Exiting..')
                     raise StopIt()
 
@@ -145,8 +162,15 @@ class Listener(object):
                     pprint.pprint(self.reader.script)
                     return
 
-                if self.reader(transcript, result.is_final):
-                    # Force it to reconnect
+                match = re.search( r'\bдобавить(?P<phrase>.*)ответить(?P<response>.*)\b', transcript, re.I)
+                if result.is_final and match:
+                    self.reader.add(match['phrase'], match['response'])
+                    return
+
+                match = re.search(r'\bубрать команду(?P<phrase>.*)\b',
+                        transcript, re.I)
+                if result.is_final and match:
+                    self.reader.remove(match['phrase'])
                     return
 
             if result.is_final:
