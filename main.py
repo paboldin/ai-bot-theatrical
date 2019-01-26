@@ -1,8 +1,10 @@
 
+import collections
 import hashlib
 import os
 import re
 import sys
+import pprint
 
 from synthesize_file import synthesize_text_file, synthesize_ssml_file
 from transcribe_streaming_mic import recognize_microphone_stream
@@ -17,9 +19,26 @@ SOUND_DIR='sound_dir'
 def play(filename):
     os.system("mpg123 {}".format(filename))
 
+SSML = """
+<?xml version="1.0"?>
+<speak version="1.1" xmlns="http://www.w3.org/2001/10/synthesis"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.w3.org/2001/10/synthesis
+                 http://www.w3.org/TR/speech-synthesis11/synthesis.xsd"
+       xml:lang="{lang}">
+    {TXT}
+</speak>
+"""
+SSML = SSML.format(lang=LANG, TXT="{TXT}")
+
 def synthesize_and_play(txt):
     txt_hash = hashlib.md5(txt.encode('utf-8')).hexdigest()
     filename = os.path.join(SOUND_DIR, '{}.mp3'.format(txt_hash))
+    synthesizer = synthesize_text_file
+    if txt[0] == '<':
+        synthesizer = synthesize_ssml_file
+        txt = SSML.format(TXT=txt)
+        print(txt)
     if not os.path.isfile(filename):
         with open(filename, "wb") as fh:
             synthesizer(txt, TTS_CLIENT, fh, lang=LANG)
@@ -33,16 +52,29 @@ class ScriptReader(object):
 
         self.update()
 
-    @staticmethod
-    def read_script(filename):
-        script = {}
+    @classmethod
+    def _text_process(cls, txt, is_input=False):
+        txt = txt.lower().strip()
+        txt = re.sub("^\* *", "", txt)
+        if not is_input:
+            return txt
+        txt = re.sub("ё", "е", txt)
+        return re.sub("[.,;:?!]", "", txt)
+
+    @classmethod
+    def read_script(cls, filename):
+        script = collections.OrderedDict()
 
         with open(filename, encoding='utf-8') as fh:
             it = iter(fh)
             try:
                 while True:
-                    k = next(it).lower().strip()
-                    v = next(it).lower().strip()
+                    k = cls._text_process(next(it), is_input=True)
+                    if not k:
+                        continue
+                    v = cls._text_process(next(it))
+                    if not v:
+                        continue
                     script[k] = v
             except StopIteration:
                 pass
@@ -53,7 +85,7 @@ class ScriptReader(object):
         self.script = self.read_script(self.filename)
 
     def __call__(self, transcript, is_final=False):
-        transcript = transcript.lower().strip()
+        transcript = self._text_process(transcript, is_input=True)
 
         replica = self.script.get(transcript)
 
@@ -107,6 +139,10 @@ class Listener(object):
                 if re.search(r'\bсмени пластинку\b', transcript, re.I):
                     print('Updating..')
                     self.reader.update()
+                    return
+
+                if re.search(r'\bпокажи сценарий\b', transcript, re.I):
+                    pprint.pprint(self.reader.script)
                     return
 
                 if self.reader(transcript, result.is_final):
