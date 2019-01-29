@@ -6,6 +6,12 @@ import re
 import sys
 import pprint
 
+import numpy
+
+from nltk.corpus import stopwords
+from gensim.models import KeyedVectors
+import pymorphy2
+
 from synthesize_file import synthesize_text_file, synthesize_ssml_file
 from transcribe_streaming_mic import recognize_microphone_stream
 
@@ -117,6 +123,127 @@ class ScriptReader(object):
 
         return True
 
+class W2VScriptReader(ScriptReader):
+    stopwords = stopwords.words('russian')
+    pymorphy = pymorphy2.MorphAnalyzer()
+
+    grammar_map_POS_TAGS = {
+        'NOUN': '_NOUN',
+        'VERB': '_VERB', 'INFN': '_VERB', 'GRND': '_VERB', 'PRTF': '_VERB', 'PRTS': '_VERB',
+        'ADJF': '_ADJ', 'ADJS': '_ADJ',
+        'ADVB': '_ADV',
+        'PRED': '_ADP',
+    }
+
+    def __init__(self, *args, **kwargs):
+        print("Loading word2vec...")
+        self.w2v = KeyedVectors.load_word2vec_format('model/model.bin',
+                binary=True, encoding='utf-8')
+        print("done")
+
+        super(W2VScriptReader, self).__init__(*args, **kwargs)
+
+    @classmethod
+    def _text_process(cls, txt, is_input=False, filter_stopwords=False):
+        txt = txt.lower().strip()
+        txt = re.sub("^\* *", "", txt)
+        if not is_input:
+            return txt
+        txt = re.sub("ё", "е", txt)
+        txt = re.sub("[.,;:?!]", "", txt)
+        if filter_stopwords:
+            txt = " ".join(x for x in txt.split() if x not in cls.stopwords)
+        return txt
+
+    def update_vecs(self):
+        self.vectors = collections.OrderedDict()
+        for key, value in self.script.items():
+            self.add_vector_item(key, value)
+
+    def to_vector(self, txt):
+        total = numpy.zeros((self.w2v.vector_size,))
+        txt = self._text_process(txt, is_input=True, filter_stopwords=True)
+
+        words = txt.split()
+        nwords = 0
+        for word in words:
+            parse = self.pymorphy.parse(word)[0]
+            POS = parse.tag.POS
+            if POS is None:
+                print("dont know word", word)
+                continue
+            print(word, parse, POS)
+            POS = self.grammar_map_POS_TAGS.get(POS)
+            if POS is None:
+                print("can't map word", word)
+                continue
+            word = parse.normal_form
+            try:
+                vec = self.w2v[word + POS]
+                total += vec
+                nwords += 1
+            except KeyError:
+                print("no word ", word + POS)
+        return total / numpy.sqrt(numpy.dot(total, total) + 0.0001)
+
+    def add_vector_item(self, key, value):
+        if key == 'default':
+            return
+        vec = self.to_vector(key)
+        self.vectors[key] = (vec, key, value)
+
+    def lookup(self, key):
+        lookup = self.to_vector(key)
+        mindistance, element = float('+inf'), None
+        for i, (vec, q, a) in enumerate(self.vectors.values()):
+            d = lookup - vec
+            distance = numpy.sqrt(numpy.dot(d, d))
+            print(distance, q)
+            if distance < mindistance:
+                mindistance = distance
+                element = (vec, q, a)
+        print(mindistance, element[1], element[2])
+        return element
+
+    def update(self):
+        super(W2VScriptReader, self).update()
+        self.update_vecs()
+
+    def add(self, key, value):
+        key = self._text_process(key, is_input=True)
+        value = self._text_process(value)
+
+        self.script[key] = value
+        self.add_vector_item(key, value)
+
+    def remove(self, key):
+        key = self._text_process(key, is_input=True)
+        self.script.pop(key)
+        self.vectors.pop(key)
+
+    def __call__(self, transcript, is_final=False):
+        exact = self._text_process(transcript, is_input=True)
+
+        replica = self.script.get(exact)
+        if not replica and not is_final:
+            return
+
+        if is_final:
+            clear = self._text_process(transcript, is_input=True,
+                    filter_stopwords=True)
+            replica = self.lookup(clear)
+            if replica:
+                replica = replica[2]
+
+        if not replica:
+            replica = self.script.get('default')
+
+        print("Got {}, respond with {}".format(transcript, replica))
+
+        self.callback(replica)
+
+        return True
+
 class StopIt(Exception):
     pass
 
@@ -192,7 +319,7 @@ def main():
     except IndexError:
         filename = 'script-%s.txt' % LANG
 
-    script_reader = ScriptReader(
+    script_reader = W2VScriptReader(
             filename,
             synthesize_and_play,
             lang=LANG)
