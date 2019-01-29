@@ -16,8 +16,13 @@ synthesizer = synthesize_text_file
 
 SOUND_DIR='sound_dir'
 
-def play(filename):
-    os.system("mpg123 {}".format(filename))
+if os.name == 'nt':
+    import playsound
+    def play(filename):
+        playsound.playsound(filename)
+else:
+    def play(filename):
+        os.system("mpg123 {}".format(filename))
 
 SSML = """
 <?xml version="1.0"?>
