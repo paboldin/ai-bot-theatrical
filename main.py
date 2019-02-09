@@ -63,6 +63,16 @@ class ScriptReader(object):
 
         self.update()
 
+    def save_script(self):
+        with open(self.filename + '.tmp', 'w', encoding='utf-8') as fh:
+            for q, a in self.script.items():
+                fh.write(q + '\n')
+                fh.write(a + '\n')
+                fh.write('\n')
+        os.unlink(self.filename)
+        os.rename(self.filename + '.tmp', self.filename)
+
+
     @classmethod
     def _text_process(cls, txt, is_input=False):
         txt = txt.lower().strip()
@@ -283,6 +293,7 @@ class Listener(object):
 
                 if re.search(r'\bумри\b', transcript, re.I):
                     print('Exiting..')
+                    self.reader.save_script()
                     raise StopIt()
 
                 if re.search(r'\bсмени пластинку\b', transcript, re.I):
